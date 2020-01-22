@@ -55,16 +55,17 @@ Price <- read_excel(path="data/Prices_Jan15-Dec19.xlsx",
 Price$Date <- force_tz(Price$Date, "CET") # Force time zone to be CET
 
 # Electricity flows
-Flows <- read_excel(path="data/Hourly_Daily_Monthly_CrossBorderPhysicalFlow_01-2015_12-2019.xlsx",
-                    sheet="HourlyForR",
-                    col_names=T,
-                    trim_ws=T,
-                    #na=c("NA", "N/A"),
-                    skip=5,
-                    col_types=c("date",rep("numeric",166)) # Might be better to read date as character, for matching purposes
-                    )
-colnames(Flows) <- str_replace_all(colnames(Flows)," ","") #Get rid of spaces in column names
-Flows$Date <- force_tz(Flows$Date, "CET") #Force time zone to be CET
+Flows <- read.table("data/hourly_crossborder_physical_flows_01-01-2015_31-12-2019.csv",
+                  header=T,
+                  sep=",",
+                  check.names=T,
+                  strip.white=T,
+                  skip=4,
+                  colClasses=c("character",rep("numeric",166))
+                  )
+#colnames(Flows) <- str_replace_all(colnames(Flows)," ","") #Get rid of spaces in column names
+#Flows$Date <- force_tz(Flows$Date, "CET") #Force time zone to be CET
+Flows$Date <- ymd_hms(Flows$Date, tz="CET") #force CET time zone
 
 # Electricity emissions factors
 #EFfile <- "data/Electricity_EF.csv"
