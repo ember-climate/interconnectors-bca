@@ -1,0 +1,14 @@
+Country,MapCode,AreaCode,Currency
+Greece,GR,IPTO BZ,EUR
+Lithuania,LT,Litgrid BZ,EUR
+Croatia,HR,HOPS BZ,EUR
+Bulgaria,BG,ESO BZ,0.4
+Spain,ES,REE BZ,EUR
+Finland,FI,Fingrid BZ,EUR
+Estonia,EE,Elering BZ,EUR
+Latvia,LV,AST BZ,EUR
+Hungary,HU,MAVIR BZ,EUR
+Romania,RO,Transelectrica BZ,0.21
+Poland,PL,PSE SA BZ,0.23
+Slovakia,SK,SEPS BZ,EUR
+Italy,IT_CNOR,IT-Centre-North BZ,EUR
