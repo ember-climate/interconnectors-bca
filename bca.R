@@ -31,6 +31,7 @@ plot_theme <- theme_minimal() +
         plot.margin = unit(c(1,1,1,1), "cm")
 )
 
+# Sandbag colour scheme
 SB_cols <- c("#FFCB33", 
              "#5C7397", 
              "#B9D4D1", 
@@ -43,19 +44,21 @@ SB_cols <- c("#FFCB33",
 
 # ==== Read and clean data ====
 
-# Price data
-Price <- read_excel(path="data/Prices_Jan15-Dec19.xlsx",
-                    sheet="Prices",
-                    col_names=T,
-                    trim_ws=T,
-                    #na=c("NA", "N/A"),
-                    skip=8,
-                    col_types=c("date",rep("numeric",22)) # Might be better to read date as character, for matching purposes
+Price <- read.csv("data/Prices_Jan15-Dec19.csv",
+                    header=T,
+                    sep=",",
+                    check.names=T,
+                    strip.white=T,
+                    colClasses=c("character", rep("numeric",22))
 )
-Price$Date <- force_tz(Price$Date, "CET") # Force time zone to be CET
+#colnames(Flows) <- str_replace_all(colnames(Flows)," ","") #Get rid of spaces in column names
+#Flows$Date <- force_tz(Flows$Date, "CET") #Force time zone to be CET
+Price$Date <- dmy_hm(Price$Date, tz="CET") #force CET time zone
+Price <- Price[!is.na(Price$Date),]
+
 
 # Electricity flows
-Flows <- read.table("data/hourly_crossborder_physical_flows_01-01-2015_31-12-2019.csv",
+Flows <- read.csv("data/hourly_crossborder_physical_flows_01-01-2015_31-12-2019.csv",
                   header=T,
                   sep=",",
                   check.names=T,
@@ -65,7 +68,8 @@ Flows <- read.table("data/hourly_crossborder_physical_flows_01-01-2015_31-12-201
                   )
 #colnames(Flows) <- str_replace_all(colnames(Flows)," ","") #Get rid of spaces in column names
 #Flows$Date <- force_tz(Flows$Date, "CET") #Force time zone to be CET
-Flows$Date <- ymd_hms(Flows$Date, tz="CET") #force CET time zone
+Flows$Date <- dmy_hm(Flows$Date, tz="CET") #force CET time zone
+Flows <- Flows[!is.na(Flows$Date),]
 
 # Electricity emissions factors
 #EFfile <- "data/Electricity_EF.csv"
@@ -200,7 +204,7 @@ Flows[,grepl("FormerYugoslavRepublicofMacedonia", colnames(Flows))] <- NULL
 # convert flow data to long format and filter down to flows between countres of interest
 Flows <- Flows %>% gather(Countries, Flow, -Date) %>% 
   separate(Countries, c("From", "To"), sep="\\.") %>%
-  filter(Date < as.POSIXct("2020/01/01 00:00:00", tz="CET")) %>%
+#  filter(Date < as.POSIXct("2020/01/01 00:00:00", tz="CET")) %>%
   mutate(Direction = ifelse((From %in% non_ETS_countries_of_interest) & (To %in% ETS_countries_of_interest), 
                             "Import",
                             ifelse((From %in% ETS_countries_of_interest) & (To %in% non_ETS_countries_of_interest), "Export", NA))) %>%
@@ -233,7 +237,7 @@ Price <- Price %>% gather(Code, Price, -Date)
 # Bring map code into Flows using (destination) country name.
 Flows <- left_join(Flows, price_areas[c("Country","MapCode")],by=c("To"="Country"))
 # TEST: 
-table(Flows$To, Flows$MapCode, useNA = "always")
+table(Flows$To[Flows$Direction=="Import"], Flows$MapCode[Flows$Direction=="Import"], useNA = "always")
 
 # Bring prices into Flows data frame, using combo of Date/time and country code to match.
 Flows <- left_join(Flows, Price, by=c("Date"="Date", "MapCode"="Code"))
@@ -248,7 +252,7 @@ Flows <- mutate(Flows, Year = year(Date))
 
 # TESTS
 # Test that all Imports have an associated price. No Imports should be TRUE. 
-# 4 are. All around the time of clock changes. something funny is going on with that. It only has a tiny impact
+# 5 are TRUE. All around the time of clock changes. something funny is going on with that. It has a negligible impact
 table(Flows$Direction, is.na(Flows$Price))
 table(Flows$Direction, is.na(Flows$MapCode))
 
@@ -383,9 +387,6 @@ NetFlows$Date_day <- date(NetFlows$Date)
 ######################################
 
 # All yearly and monthly summaries have been corrected for the dodgy data of Bulgaria -> Turkey.
-
-# Western Balkan countries in the data.
-WBalk <- c("Albania", "BosniaHerzegovina", "NorthMacedonia", "Serbia", "Montenegro")
 
 # Aggregate to annual flows between every pair of counties
 Flows_by_pair_year <- Flows %>% 
@@ -607,489 +608,19 @@ write.csv(select(Net_by_month_pair, -my_text, -my, -Month_num), file="data/Net_m
 write.csv(Net_by_pair_day, file="data/Net_daily_flows_by_pairs.csv", row.names=F)
 write.csv(Import_by_EUcountry_year, file="data/Import_by_EUcountry_year.csv", row.names=F)
 
+######################################
+# ==== PLOTS ====
+######################################
 
-# ==== Plots ====
-
-# Dates for 2019 adjustment
-Date2 <- ymd_hms("2018-12-31 23:59:59", tz="CET")
-Date1 <- ymd_hms("2018-09-30 23:59:59", tz="CET")
-
-# ==== PLOT net flows by month, by region ====================
-
+# ==== PLOT timeline (monthly) of net flows by non-EU region ====================
 
 png(file="plots/Monthly_net_by_region_timeline_highres.png",width=1200,height=950,res=200,type='cairo')
-ggplot(filter(Net_by_month_country, !From %in% "Montenegro"), aes(x=my, y=Energy*1000.0)) +
-  facet_wrap(~From,3,3) +
-  #geom_line(aes(group=Region, colour=Region)) +
-  geom_line(aes(group=From, colour=From), size=1) +
-  geom_line(data=tibble(x=as.Date(c("01-01-2015","31-12-2019"), format="%d-%m-%Y"),y=c(0,0)),
-            aes(x=x,y=y),
-            size=0.5, colour="grey20",alpha=0.7) +
-  theme_minimal() +
-  theme(axis.text.x=element_text(angle=55,hjust=1),
-        title = element_text(colour="grey20", size=12),
-        text = element_text(colour="grey20", size=12),
-        plot.title = element_text(hjust=0.5),
-        axis.title.y = element_text(margin = margin(t = 0, r = 10, b = 0, l = 0))) +
-  labs(x="", y="Net monthly exchange (GWh)", 
-       colour = "Non-EU country"
-       ) +
-  scale_colour_manual(values = SB_cols) +
-  scale_y_continuous(breaks=c(-500, 0, 500, 1000, 1500), labels=c("500", "0", "500", "1000", "1500")) +
-  guides(colour=FALSE)
-dev.off()
-
-
-# ==== PLOT gross EU imports by origin country over time =====
-
-#estimates for the last quarter of 2019 - won't need these eventually!
-Belarus_2019_adj <- sum(Flows$Flow[Flows$Direction=="Import" & (Flows$From == "Belarus") & (Flows$Date < Date2) & (Flows$Date > Date1)], na.rm=T)/1000000.0
-Russia_2019_adj <- sum(Flows$Flow[Flows$Direction=="Import" & (Flows$From == "RussianFederation") & (Flows$Date < Date2) & (Flows$Date > Date1)], na.rm=T)/1000000.0
-Turkey_2019_adj <- sum(Tur_flow$Flow[Tur_flow$Direction=="Export" & Tur_flow$Year==2018 & Tur_flow$Month %in% c("October", "November", "December")], na.rm=T)/1000.0
-Ukraine_2019_adj <- sum(Flows$Flow[Flows$Direction=="Import" & grepl("Ukraine",Flows$From) & (Flows$Date < Date2) & (Flows$Date > Date1)], na.rm=T)/1000000.0
-Morocco_2019_adj <- sum(Flows$Flow[Flows$Direction=="Import" & (Flows$From == "Morocco") & (Flows$Date < Date2) & (Flows$Date > Date1)], na.rm=T)/1000000.0
-
-# create two new data points fo each country. The 2018 imports, and projected 2019 imports
-Belarus_2018 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2018 & Import_by_country_year$From=="Belarus"])
-Belarus_2019 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2019 & Import_by_country_year$From=="Belarus"]) + Belarus_2019_adj
-Russia_2018 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2018 & Import_by_country_year$From=="RussianFederation"])
-Russia_2019 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2019 & Import_by_country_year$From=="RussianFederation"]) + Russia_2019_adj
-Turkey_2018 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2018 & Import_by_country_year$From=="Turkey"])
-Turkey_2019 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2019 & Import_by_country_year$From=="Turkey"]) + Turkey_2019_adj
-Ukraine_2018 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2018 & Import_by_country_year$From=="Ukraine"])
-Ukraine_2019 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2019 & Import_by_country_year$From=="Ukraine"]) + Ukraine_2019_adj
-Morocco_2018 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2018 & Import_by_country_year$From=="Morocco"])
-Morocco_2019 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2019 & Import_by_country_year$From=="Morocco"]) + Morocco_2019_adj
-
-# Western Balkans agregate data
-WB_2019_adj <- sum(Flows$Flow[Flows$Year==2018 & Flows$Direction=="Import" & (Flows$From %in% WBalk) & (Flows$Date < Date2) & (Flows$Date > Date1)], na.rm=T)/1000000.0
-WB_Imp2015 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2015 & Import_by_country_year$From %in% WBalk])
-WB_Imp2016 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2016 & Import_by_country_year$From %in% WBalk])
-WB_Imp2017 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2017 & Import_by_country_year$From %in% WBalk])
-WB_Imp2018 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2018 & Import_by_country_year$From %in% WBalk])
-WB_Imp2019 <- sum(Import_by_country_year$Energy[Import_by_country_year$Year==2019 & Import_by_country_year$From %in% WBalk]) + WB_2019_adj
-
-#select data with Western Balkans combined or not
-#Import_by_country_year %>% # Not combined
-plot_data1 <- ungroup(Import_by_country_year) %>% select(Year, From, Energy) %>% 
-  filter(Year != 2019) %>%
-  mutate(Type="Actual") %>% 
-  add_row(Year=2015, From="Western Balkans", Energy = WB_Imp2015, Type="Actual") %>%
-  add_row(Year=2016, From="Western Balkans", Energy = WB_Imp2016, Type="Actual") %>%
-  add_row(Year=2017, From="Western Balkans", Energy = WB_Imp2017, Type="Actual") %>%
-  add_row(Year=2018, From="Western Balkans", Energy = WB_Imp2018, Type="Actual") %>%
-  add_row(Year=2018, From="Western Balkans", Energy = WB_Imp2018, Type="Proj") %>%
-  add_row(Year=2019, From="Western Balkans", Energy = WB_Imp2019, Type="Proj") %>%
-  add_row(Year=2018, From="Belarus" , Energy=Belarus_2018, Type="Proj") %>%
-  add_row(Year=2019, From="Belarus", Energy=Belarus_2019, Type="Proj") %>%
-  add_row(Year=2018, From="RussianFederation" , Energy=Russia_2018, Type="Proj") %>%
-  add_row(Year=2019, From="RussianFederation", Energy=Russia_2019, Type="Proj") %>%
-  add_row(Year=2018, From="Turkey" , Energy=Turkey_2018, Type="Proj") %>%
-  add_row(Year=2019, From="Turkey", Energy=Turkey_2019, Type="Proj") %>%
-  add_row(Year=2018, From="Ukraine" , Energy=Ukraine_2018, Type="Proj") %>%
-  add_row(Year=2019, From="Ukraine", Energy=Ukraine_2019, Type="Proj") %>%
-  add_row(Year=2018, From="Morocco" , Energy=Morocco_2018, Type="Proj") %>%
-  add_row(Year=2019, From="Morocco", Energy=Morocco_2019, Type="Proj") %>%
-  filter(!From %in% WBalk) # Remove individual WBalk countries
-
-png(file="plots/Gross_Imports_by_region_2015-19.png",width=800,height=500,res=120,type='cairo')
-ggplot(data = plot_data1,
-       aes(x=Year, y=Energy)) +
-  geom_line(aes(colour=From, linetype=Type), size=1.5) +
-  #theme_classic() +
-  plot_theme +
-  #theme(axis.line.x.bottom=) +
-# theme(panel.grid.major.y = element_line(colour="grey60", size=0.5)) +
-  xlim(c(2015,2019)) +
-  labs(x="", y="Energy (TWh)", 
-       title="Gross electricity imports into EU ETS by origin", 
-       colour = "Country") +
-  scale_color_brewer(palette = "Set1", labels = c("RussianFederation"="Russia")) +
-  scale_y_continuous(breaks=c(0,5,10,15), limits = c(0,15)) +
-  guides(linetype=FALSE)
-dev.off()
-
-
-# ==== PLOT Net imports by origin over time ====
-
-Belarus_net_q42018 <- sum(NetFlows$NetFlow[(NetFlows$From == "Belarus") & (NetFlows$Date < Date2) & (NetFlows$Date > Date1)], na.rm=T)/1000000.0
-Russia_net_q42018 <- sum(NetFlows$NetFlow[(NetFlows$From == "RussianFederation") & (NetFlows$Date < Date2) & (NetFlows$Date > Date1)], na.rm=T)/1000000.0
-Ukraine_net_q42018 <- sum(NetFlows$NetFlow[grepl("Ukraine", NetFlows$From) & (NetFlows$Date < Date2) & (NetFlows$Date > Date1)], na.rm=T)/1000000.0
-Morocco_net_q42018 <- sum(NetFlows$NetFlow[(NetFlows$From == "Morocco") & (NetFlows$Date < Date2) & (NetFlows$Date > Date1)], na.rm=T)/1000000.0
-Turkey_net_q42018 <- sum(Tur_flow$Flow[Tur_flow$Direction=="Export" & Tur_flow$Year==2018 & Tur_flow$Month_num > 9], na.rm=T)/1000.0 - sum(Tur_flow$Flow[Tur_flow$Direction=="Import" & Tur_flow$Year==2018 & Tur_flow$Month_num > 9], na.rm=T)/1000.0
-
-# create two new data points fo each country. The 2018 net imports, and projected 2019 net imports
-Belarus_net2018 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2018 & Net_by_country_year$From=="Belarus"])
-Belarus_net2019 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2019 & Net_by_country_year$From=="Belarus"]) + Belarus_net_q42018
-Russia_net2018 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2018 & Net_by_country_year$From=="RussianFederation"])
-Russia_net2019 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2019 & Net_by_country_year$From=="RussianFederation"]) + Russia_net_q42018
-Turkey_net2018 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2018 & Net_by_country_year$From=="Turkey"])
-Turkey_net2019 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2019 & Net_by_country_year$From=="Turkey"]) + Turkey_net_q42018
-Ukraine_net2018 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2018 & Net_by_country_year$From=="Ukraine"])
-Ukraine_net2019 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2019 & Net_by_country_year$From=="Ukraine"]) + Ukraine_net_q42018
-Morocco_net2018 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2018 & Net_by_country_year$From=="Morocco"])
-Morocco_net2019 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2019 & Net_by_country_year$From=="Morocco"]) + Morocco_net_q42018
-
-# Western Balkans aggregated and adjusted data
-WB_net_q42018 <- sum(NetFlows$NetFlow[(NetFlows$Year==2018) & (NetFlows$From %in% WBalk) & (NetFlows$Date < Date2) & (NetFlows$Date > Date1)], na.rm=T)/1000000.0
-WB_net2015 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2015 & Net_by_country_year$From %in% WBalk])
-WB_net2016 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2016 & Net_by_country_year$From %in% WBalk])
-WB_net2017 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2017 & Net_by_country_year$From %in% WBalk])
-WB_net2018 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2018 & Net_by_country_year$From %in% WBalk])
-WB_net2019 <- sum(Net_by_country_year$Energy[Net_by_country_year$Year==2019 & Net_by_country_year$From %in% WBalk]) + WB_net_q42018
-
-plot_data5 <- ungroup(Net_by_country_year) %>% select(Year, From, Energy) %>% 
-  filter(Year != 2019) %>%
-  mutate(Type="Actual") %>% 
-  add_row(Year=2015, From="Western Balkans", Energy = WB_net2015, Type="Actual") %>%
-  add_row(Year=2016, From="Western Balkans", Energy = WB_net2016, Type="Actual") %>%
-  add_row(Year=2017, From="Western Balkans", Energy = WB_net2017, Type="Actual") %>%
-  add_row(Year=2018, From="Western Balkans", Energy = WB_net2018, Type="Actual") %>%
-  add_row(Year=2018, From="Western Balkans", Energy = WB_net2018, Type="Proj") %>%
-  add_row(Year=2019, From="Western Balkans", Energy = WB_net2019, Type="Proj") %>%
-  add_row(Year=2018, From="Belarus" , Energy=Belarus_net2018, Type="Proj") %>%
-  add_row(Year=2019, From="Belarus", Energy=Belarus_net2019, Type="Proj") %>%
-  add_row(Year=2018, From="RussianFederation" , Energy=Russia_net2018, Type="Proj") %>%
-  add_row(Year=2019, From="RussianFederation", Energy=Russia_net2019, Type="Proj") %>%
-  add_row(Year=2018, From="Turkey" , Energy=Turkey_net2018, Type="Proj") %>%
-  add_row(Year=2019, From="Turkey", Energy=Turkey_net2019, Type="Proj") %>%
-  add_row(Year=2018, From="Ukraine" , Energy=Ukraine_net2018, Type="Proj") %>%
-  add_row(Year=2019, From="Ukraine", Energy=Ukraine_net2019, Type="Proj") %>%
-  add_row(Year=2018, From="Morocco" , Energy=Morocco_net2018, Type="Proj") %>%
-  add_row(Year=2019, From="Morocco", Energy=Morocco_net2019, Type="Proj") %>%
-  filter(!From %in% WBalk) # Remove individual WBalk countries
-
-png(file="plots/Net_Imports_by_region_2015-19.png",width=800,height=500,res=120,type='cairo')
-ggplot(data = plot_data5,
-       aes(x=Year, y=Energy)) +
-  geom_line(aes(colour=From, linetype=Type), size=1.5) +
-  #theme_classic() +
-  plot_theme +
-  #theme(axis.line.x.bottom=) +
-  # theme(panel.grid.major.y = element_line(colour="grey60", size=0.5)) +
-  xlim(c(2015,2019)) +
-  labs(x="", y="Net imports (TWh)", 
-       title="Net electricity imports into EU ETS by origin region", 
-       colour = "Country") +
-  scale_color_brewer(palette = "Set1", labels = c("RussianFederation"="Russia")) +
-  scale_y_continuous(breaks=c(-10, -5, 0,5,10,15), limits = c(-10,15)) +
-  guides(linetype=FALSE)
+source("region_flows_time.R")
 dev.off()
 
 # ==== PLOT absolute and net flow by year ====
 
 png(file="plots/Net_flow_by_year_highres.png",width=1200,height=750,res=160,type='cairo')
-Flows_by_year %>% 
-  select(Year, Energy, Direction) %>%
-  mutate(Energy=ifelse(Direction=="Export", -1.0*Energy, Energy)) %>%
-ggplot(aes(x=Year)) +
-  geom_bar(aes(y=Energy, fill=Direction), stat="identity", width=0.8) +
-  labs(y="Electricity (TWh)",
-       x="",
-       fill="") +
-  geom_point(data=Net_by_year[c("Year", "Energy")], aes(x=Year, y=Energy, size=3), colour="grey40") +
-  geom_line(data=Net_by_year[c("Year", "Energy")], aes(x=Year, y=Energy), colour="grey40", size=0.5) +
-  plot_theme +
-  scale_y_continuous(breaks = c(-30,-20,-10,0,10,20,30),
-                     labels = c("30","20","10","0","10","20","30")) +
-  scale_x_continuous(breaks = c(2015, 2016, 2017, 2018, 2019),
-                     labels = c("2015", "2016", "2017", "2018", "2019"),
-                     ) +
-  scale_fill_manual(guide = guide_legend(reverse=TRUE), 
-                      values = c("#FF9D80", "#B9D4D1")) +
-  scale_size(name="", labels=c("Net imports"))
+source("annual_flows_total.R")
 dev.off()
 
-# ==== SLOPE plot of carbon intensities ====
-
-slope_data <- NetFlows %>% filter(Year==2019) %>%
-  mutate(From=ifelse(From=="Ukraine-Bur", "UkraineB",From),
-         From=ifelse(From=="Ukraine-Dob", "UkraineD",From),
-         Pair=str_c(From,"-",To)) %>%
-  group_by(Pair) %>% 
-  summarise(EF_From = mean(EF_From, na.rm=T)*1000000.0,
-            EF_To = mean(EF_To, na.rm=T)*1000000.0) %>%
-  ungroup() %>%
-  mutate(From = gsub("([A-z]+)\\-[A-z]+","\\1",Pair),
-         To = gsub("[A-z]+\\-([A-z]+)","\\1",Pair),
-         From = ifelse(From=="RussianFederation", "Russia", From),
-         From = ifelse(From=="BosniaHerzegovina", "Bosnia &\nHerzegovina", From),
-         From = ifelse(From=="UkraineB", "Ukraine (Bur)", From),
-         From = ifelse(From=="UkraineD", "Ukraine (Dob)", From),
-         #EF_diff = ifelse(EF_To < EF_From, "light","dark"),
-         EF_diff = "light",
-         EF_diff = ifelse(From=="Russia" & To=="Finland","top5",EF_diff),
-         EF_diff = ifelse(From=="Ukraine (Bur)" & To=="Hungary","top5",EF_diff), 
-         EF_diff = ifelse(From=="Russia" & To=="Lithuania","top5",EF_diff),
-         EF_diff = ifelse(From=="Macedonia" & To=="Greece","top5",EF_diff),
-         EF_diff = ifelse(From=="Turkey" & To=="Greece","top5",EF_diff))
-
-png(file="plots/EF_compare_slope.png",width=650,height=700,res=120,type='cairo')
-ggplot(data=slope_data) +
-  geom_segment(aes(x = 1,
-                   xend = 2.2,
-                   y = EF_From,
-                   yend = EF_To,
-                   group = Pair,
-                   col = EF_diff),
-               alpha=0.8,
-               size=0.6) +
-  geom_segment(data=filter(slope_data, EF_diff == "top5"),
-               aes(x = 1,
-                   xend = 2.2,
-                   y = EF_From,
-                   yend = EF_To,
-                   group = Pair,
-                   col = EF_diff),
-               alpha=1.0,
-               size=1.2) +
-  scale_color_manual(values = c("dark"="#468189","light"="#9DBEBB","top5"="#EB4034"), guide = "none")  +
-  #E68C74 - dirty salmon
-  #9DBEBB - light orig
-  #468189 - dark orig
-  # remove all axis stuff
-  theme_classic() + 
-  theme(axis.line = element_blank(),
-        axis.text = element_blank(),
-        axis.title = element_blank(),
-        axis.ticks = element_blank()) +
-  geom_line(data=tibble(x = c(0.4,0.4,1,1,2.2,2.2),
-                        y = c(-50, 1150, -50, 1150, -50, 1150),
-                        group = c("scale", "scale", "left", "left", "right", "right")),
-            aes(x=x, y=y, group=group),
-            size=0.5,
-            col="grey70") +
-  geom_text(aes(x=x, y=y, label = label),
-            data = tibble(x = c(1.0,2.2), 
-                          y = c(1200,1200),
-                          label = c("non-EU", "EU")),
-            col = "grey30", size=5
-            ) +
-  geom_text(data=tibble(x=c(0.4), y=c(1200), label=c("gCO2/kWh")),
-            aes(x=x, y=y, label=label),
-            size=3.5, hjust="center", col= "grey30"
-  ) +
-  geom_text(aes(x=1-0.05,
-                y=EF_From,
-                label=From),
-            col = "grey30", hjust = "right"
-            ) +
-  geom_text(data=tibble(x=rep(0.37,12),
-                        y=seq(0,1100,100),
-                        label=as.character(seq(0,1100,100))),
-            aes(x=x, y=y,label=label),
-            col="grey30", hjust="right", size=3.5
-            ) +
-  geom_text(aes(x=2.2+0.05,
-                y=EF_To,
-                label=To),
-            col = "grey30", hjust = "left"
-            ) +
-  scale_x_continuous(limits = c(0.2, 2.5)) +
-  geom_point(aes(x = 1, 
-                 y = EF_From), size = 4.5,
-             col = "white") +
-  # add the white outline for the points at each rate for women
-  geom_point(aes(x = 2.2, 
-                 y = EF_To), size = 4.5,
-             col = "white") +
-  # add the actual points at each rate for men
-  geom_point(aes(x = 1, 
-                 y = EF_From), size = 4,
-             col = "grey60") +
-  # add the actual points at each rate for men
-  geom_point(aes(x = 2.2, 
-                 y = EF_To), size = 4,
-             col = "grey60") +
-  geom_text(data=tibble(x=1.6,
-                        y=1320,
-                        label="Grid carbon intensities\nof connected grids"),
-            aes(x=x,y=y,label=label),
-            size=5, colour="grey30")
-dev.off()
-#ggslope
-
-
-# ==== PLOT absolute and net flow by country - country link ====
-# NOT ADJUSTED FOR TURKEY
-#png(file="plots/Net_flow_by_pair.png",width=1000,height=500,res=120,type='cairo')
-#ungroup(Net_2019) %>% mutate(From = ifelse(From=="RussianFederation", "Russia", From),
-#                                            From = ifelse(From=="BosniaHerzegovina", "Bosnia Herzegovina", From),
-#                                            Pair=str_c(From, "-", To)) %>%
-#  select(Pair, EnergyExp, EnergyImp) %>%
-#  gather(key="Direction",value="Flow",-Pair) %>%
-#  mutate(Flow = ifelse(Direction=="EnergyExp", -1.0*Flow, Flow)) %>%
-#ggplot(aes(x=Pair)) +
-#  geom_bar(aes(y=Flow, fill=Direction), stat="identity", width=0.7) +
-#  labs(title="Electricity flows between EU ETS states and non-EU neighbours, Q1-3 2019",
-#       x="",
-#       y="Gross energy flow (TWh)",
-#       fill="") +
-#  plot_theme +
-#  theme(axis.text.x=element_text(angle=55,hjust=1),
-#        panel.grid.major.y = element_line(colour="grey70", size=0.5)) +
-#        #panel.grid.major.x = element_line(colour="grey90", size=0.5, linetype="dotted")) +
-#  scale_y_continuous(breaks = c(-2,0,2,4,6),
-#                     labels = c("2","0","2","4","6")) +
-#  scale_fill_discrete(guide = guide_legend(reverse=TRUE),
-#                      labels = c("EnergyExp"="Export",
-#                                 "EnergyImp"="Import")
-#  )
-#dev.off()
-
-# ==== PLOT absolute and net Carbon by country-country link ====
-# NOT ADJUSTED FOR NEW TURKEY DATA
-#png(file="plots/Net_carbon_by_pair.png",width=1000,height=500,res=120,type='cairo')
-#ungroup(Net_2019) %>% mutate(From = ifelse(From=="RussianFederation", "Russia", From),
-#                             From = ifelse(From=="BosniaHerzegovina", "Bosnia Herzegovina", From),
-#                             Pair=str_c(From, "-", To)) %>%
-#  select(Pair, CarbonExp, CarbonImp) %>%
-#  gather(key="Direction",value="Carb",-Pair) %>%
-#  mutate(Carb = ifelse(Direction=="CarbonExp", -1.0*Carb, Carb)) %>%
-#  ggplot(aes(x=Pair)) +
-#  geom_bar(aes(y=Carb, fill=Direction), stat="identity", width=0.7) +
-#  labs(title="CO2 flows between EU ETS states and non-EU neighbours, Q1-3 2019",
-#       x="",
-#       y=" CO2 (Mt)",
-#       fill="") +
-#  plot_theme +
-#  theme(axis.text.x=element_text(angle=55,hjust=1),
-#        panel.grid.major.y = element_line(colour="grey70", size=0.5)) +
-#  #panel.grid.major.x = element_line(colour="grey90", size=0.5, linetype="dotted")) +
-#  scale_y_continuous(breaks = c(-2,0,2,4,6),
-#                     labels = c("2","0","2","4","6")) +
-#  scale_fill_discrete(guide = guide_legend(reverse=TRUE),
-#                      labels = c("CarbonExp"="Export",
-#                                 "CarbonImp"="Import")
-#  )
-#dev.off()
-
-
-# ==== PLOT gross Carbon flows with non-EU neighbours ====
-# NOT ADJUSTED FOR NEW TURKEY DATA
-#png(file="plots/Carbon_flows_non-EU.png",width=1000,height=500,res=120,type='cairo')
-#ungroup(Net_2019) %>% mutate(From = ifelse(From=="RussianFederation", "Russia", From),
-#                             From = ifelse(From=="BosniaHerzegovina", "Bosnia Herzegovina", From)) %>%
-#  select(From, CarbonExp, CarbonImp) %>%
-#  gather(key="Direction",value="Carb",-From) %>%
-#  mutate(Carb = ifelse(Direction=="CarbonExp", -1.0*Carb, Carb)) %>%
-#  ggplot(aes(x=From)) +
-#  geom_bar(aes(y=Carb, fill=Direction), stat="identity", width=0.7) +
-#  labs(title="CO2 from electricity, exchanged with non-EU neighbours, Q1-3 2019",
-#       x="",
-#       y=" CO2 (Mt)",
-#       fill="") +
-#  plot_theme +
-#  theme(axis.text.x=element_text(angle=55,hjust=1),
-#        panel.grid.major.y = element_line(colour="grey70", size=0.5)) +
-#  #panel.grid.major.x = element_line(colour="grey90", size=0.5, linetype="dotted")) +
-#  scale_y_continuous(breaks = c(-2,0,2,4,6,8),
-#                     labels = c("2","0","2","4","6","8"),
-#                     limits = c(-2,8)) +
-#  scale_fill_discrete(guide = guide_legend(reverse=TRUE),
-#                      labels = c("CarbonExp"="Out of EU",
-#                                 "CarbonImp"="Into EU")
-#  )
-#dev.off()
-
-
-# ==== CO2 of imported energy vs equivalent in EU country ====
-# By year - NOT ADJUSTED 2019
-# NOT ADJUTED FOR NEW TUREY DATA
-#plot_data3 <- ungroup(Import_by_country_year) %>% 
-#  select(Year, CO2, CO2_equiv) %>%
-#  gather(EmEq, Carbon, -Year) %>%
-#  group_by(Year, EmEq) %>%
-#  summarise(C_tot=sum(Carbon, na.rm=T)) %>%
-#  mutate(EmEq = ifelse(EmEq=="CO2", "Emitted", "EU Equivalent"))
-#
-#png(file="plots/co2_compare_year.png",width=800,height=500,res=120,type='cairo')
-#ggplot(data=plot_data3,
-#       aes(x=Year, y=C_tot, fill=EmEq)) +
-#  geom_bar(stat="identity", position="dodge", width=0.8) +
-#  labs(title="CO2 emissions of imported energy in exporting vs importing countries",
-#       x="Year",
-#       y=expression(paste("CO"[2]," (Mt)")),
-#       fill="") + 
-#  plot_theme +
-#  scale_x_continuous(breaks = c(2015, 2016, 2017, 2018, 2019),
-#                     labels = c("2015", "2016", "2017", "2018", "2019*"))
-#dev.off()
-#  #theme_minimal() +
-#  #theme(title = element_text(size=10),
-#  #      panel.background = element_blank(),
-#  #      panel.grid = element_blank(),
-#  #      panel.grid.major.y = element_line(colour="grey60", size=0.5))
-#
-## By country
-#plot_data4 <- ungroup(Import_by_country_year) %>%
-#  filter(Year==2018) %>%
-#  select(From, CO2, CO2_equiv) %>%
-#  gather(EmEq, Carbon, -From) %>%
-#  mutate(EmEq = ifelse(EmEq=="CO2", "Emitted", "EU Equivalent"))
-#
-#png(file="plots/co2_compare_country.png",width=800,height=450,res=120,type='cairo')
-#ggplot(data=plot_data4,
-#       aes(x=reorder(From, -Carbon), y=Carbon, fill=EmEq)) +
-#  geom_bar(stat="identity", position="dodge", width=0.8) +
-#  plot_theme +
-#  theme(axis.text.x=element_text(angle=55,hjust=1),
-#        panel.grid.major.y = element_line(colour="grey70", size=0.5)) +
-#  labs(title="CO2 emissions of imported energy in 2018: export vs import country",
-#       x="Exporting country",
-#       y=expression(paste("CO"[2]," (Mt)")),
-#       fill="") +
-#  scale_x_discrete(labels=c("RussianFederation"="Russia", "BosniaHerzegovina"="Bosnia &\n Herzegovina"))
-#dev.off()
-  #plot_theme +
-  #theme(axis.text.x=element_text(angle=45,hjust=1))
-  #theme_minimal() +
-  #theme(title = element_text(size=10),
-  #      axis.text.x=element_text(angle=45,hjust=1),
-  #      panel.background = element_blank(),
-  #      panel.grid = element_blank(),
-  #      panel.grid.major.y = element_line(colour="grey60", size=0.5))
-
-
-# ==== Scatter: connected capacity vs CO2 intensity ====
-# Not Updated. 
-#Connection_cap <- tibble(Country = c("Albania",
-#                               "Belarus",
-#                               "BosniaHerzegovina",
-#                               "Macedonia",
-#                               "Morocco",
-#                               "RussianFederation",
-#                               "Serbia",
-#                               "Turkey",
-#                               "Ukraine"),
-#                    Capacity = c(533, 
-#                                 4553, 
-#                                 5429, 
-#                                 2582,
-#                                 1359,
-#                                 5650,
-#                                 4682,
-#                                 4385,
-#                                 11513)
-#)
-#Flows_exp_2018 %>% 
-#  mutate(Year=2018) %>%
-#  left_join(EF, by=c(Year="year", Exp="country")) %>%
-#  left_join(Connection_cap, by=c(Exp="Country")) %>%
-#  mutate(Max=Capacity*365.25*24/1000000.0) %>%
-#  mutate(ef = ef*1000000.0) %>%
-#  ggplot(aes(x=Capacity, y=EnergyImp, label=Exp)) +
-#  geom_point(aes(colour=ef), size=3) + 
-#  scale_colour_gradient(low="white", high="red") +
-#  geom_text(nudge_y = -0.5) +
-#  labs(title="2018",
-#       x="Connection Capacity (MW)",
-#       y="Energy import (TWh)",
-#       colour=expression(paste("gCO"[2],"/kWh"))) +
-#  theme_minimal()
-  
-  
-
-
-
-                    
